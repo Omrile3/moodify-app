@@ -12,17 +12,18 @@ window.handleBotReply = function (msg) {
   })
     .then(res => res.json())
     .then(data => {
-      const delay = calculateTypingDelay(data.response);
+      const resp = data.response || "<span style='color:orange'>Sorry, I didn't get that. Try a different preference or reset.</span>";
+      const delay = calculateTypingDelay(resp);
       setTimeout(() => {
         hideTypingIndicator();
-        appendBotMessage(data.response || "Something went wrong.");
+        appendBotMessage(resp);
         updatePreferencesPanel();
       }, delay);
     })
     .catch(error => {
       console.error("API error:", error);
       hideTypingIndicator();
-      appendBotMessage("⚠️ Sorry, something went wrong while contacting Moodify.");
+      appendBotMessage("<span style='color:red'>⚠️ Sorry, I lost connection to Moodify. Please check your internet or try again.</span>");
       updatePreferencesPanel();
     });
 };
@@ -49,17 +50,18 @@ window.sendMessage = function () {
   })
     .then(res => res.json())
     .then(data => {
-      const delay = calculateTypingDelay(data.response);
+      const resp = data.response || "<span style='color:orange'>I didn't understand. Tell me your mood, genre, or artist!</span>";
+      const delay = calculateTypingDelay(resp);
       setTimeout(() => {
         hideTypingIndicator();
-        appendBotMessage(data.response || "Something went wrong.");
+        appendBotMessage(resp);
         updatePreferencesPanel();
       }, delay);
     })
     .catch(error => {
       console.error("API error:", error);
       hideTypingIndicator();
-      appendBotMessage("⚠️ Sorry, something went wrong while contacting Moodify.");
+      appendBotMessage("<span style='color:red'>⚠️ Sorry, I lost connection to Moodify. Please check your internet or try again.</span>");
       updatePreferencesPanel();
     });
 };
@@ -73,17 +75,21 @@ window.onload = () => {
   })
     .then(res => res.json())
     .then(data => {
-      appendBotMessage(data.response);
+      appendBotMessage(data.response || "Welcome! Tell me your mood, artist, or genre.");
       updatePreferencesPanel();
     })
     .catch(error => {
       console.error("API error:", error);
-      appendBotMessage("⚠️ Sorry, something went wrong while contacting Moodify.");
+      appendBotMessage("<span style='color:red'>⚠️ Sorry, I lost connection to Moodify.</span>");
       updatePreferencesPanel();
     });
 };
 
 function generateSessionId() {
+  // Use window.crypto for true uniqueness, fallback to random
+  if (window.crypto && window.crypto.getRandomValues) {
+    return 'sess-' + Array.from(window.crypto.getRandomValues(new Uint8Array(8))).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
   return 'sess-' + Math.random().toString(36).substring(2, 10);
 }
 
@@ -183,9 +189,9 @@ function hideTypingIndicator() {
 
 function calculateTypingDelay(text) {
   if (!text) return 500;
-  const wordCount = text.split(" ").length;
-  const delayPerWord = 120;
-  return Math.min(3000, wordCount * delayPerWord);
+  const wordCount = text.replace(/<[^>]+>/g, '').split(" ").length;
+  const delayPerWord = 90; // a bit faster for UX
+  return Math.min(2200, wordCount * delayPerWord + 350);
 }
 
 window.resetSession = function () {
@@ -201,7 +207,7 @@ window.resetSession = function () {
     })
     .catch(error => {
       hideTypingIndicator();
-      appendBotMessage("⚠️ Sorry, something went wrong while resetting your session.");
+      appendBotMessage("<span style='color:red'>⚠️ Sorry, something went wrong while resetting your session.</span>");
       console.error("Reset error:", error);
       document.getElementById("pref-genre").innerText = '—';
       document.getElementById("pref-mood").innerText = '—';
@@ -216,7 +222,6 @@ function updatePreferencesPanel() {
   fetch(`${backendUrl}/session/${sessionId}`)
     .then(res => res.json())
     .then(data => {
-      // Defensive defaults
       const genre = data.genre ? capitalize(data.genre) : (data.no_pref_genre ? '—' : '—');
       const mood = data.mood ? capitalize(data.mood) : (data.no_pref_mood ? '—' : '—');
       const tempo = data.tempo ? capitalize(data.tempo) : (data.no_pref_tempo ? '—' : '—');
@@ -227,7 +232,6 @@ function updatePreferencesPanel() {
       document.getElementById("pref-tempo").innerText = tempo;
       document.getElementById("pref-artist").innerText = artist;
 
-      // Progress bar logic
       let filled = 0;
       if (data.genre || data.no_pref_genre) filled += 1;
       if (data.mood || data.no_pref_mood) filled += 1;

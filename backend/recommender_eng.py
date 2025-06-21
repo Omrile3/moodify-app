@@ -12,21 +12,23 @@ from utils import (
     split_mode_category,
     build_recommendation_key,
     precompute_recommendation_map,
-    get_mood_vector,  # Hybrid mood vector logic
+    get_mood_vector,
 )
 
 DATA_PATH = "data/songs.csv"
-df = pd.read_csv(DATA_PATH)
+try:
+    df = pd.read_csv(DATA_PATH)
+except Exception as e:
+    print("[RECOMMENDER] Failed to load CSV:", e)
+    df = pd.DataFrame([])
 
-df["tempo_raw"] = pd.to_numeric(df["tempo"], errors="coerce")
-
+df["tempo_raw"] = pd.to_numeric(df.get("tempo", 100), errors="coerce")
 features = ['valence', 'energy', 'danceability', 'acousticness', 'tempo']
 df = df.dropna(subset=features)
 df[features] = df[features].apply(pd.to_numeric, errors='coerce')
 df = df.dropna(subset=features)
 scaler = MinMaxScaler()
 df[features] = scaler.fit_transform(df[features])
-
 recommendation_map = precompute_recommendation_map(df)
 
 SAD_MOODS = {"sad", "melancholy", "down", "emotional", "blue", "heartbreak", "gloomy"}
@@ -76,7 +78,7 @@ def weighted_score(row, prefs):
     if prefs.get("artist_or_song"):
         query = normalize(prefs["artist_or_song"])
         if query and (query in artist or query in track_name):
-            score += 2
+            score += 10  # Stronger boost for direct match
     pop_val = row.get('track_popularity', row.get('popularity', None))
     if pop_val is not None and not pd.isnull(pop_val):
         try:
@@ -92,11 +94,8 @@ def weighted_score(row, prefs):
     return score
 
 def recommend_engine(preferences: dict, api_key: str):
-    # Defensive: Only recommend if all four keys present (filled or None/"no preference")
     must_have = ["genre", "mood", "tempo", "artist_or_song"]
-    # Only proceed if all fields are filled (string) or explicitly None (no preference)
     for k in must_have:
-        # If the session logic is correct, each should exist (even as None)
         if k not in preferences or (preferences[k] is None and not preferences.get(f"no_pref_{k}", False)):
             return None
 
@@ -122,7 +121,7 @@ def recommend_engine(preferences: dict, api_key: str):
         return local_df
 
     def exclude_history(df, history):
-        if not history:
+        if not history or df.empty:
             return df
         return df[
             ~df.apply(lambda row: (row["track_name"], row["track_artist"]) in history, axis=1)
@@ -167,21 +166,26 @@ def recommend_engine(preferences: dict, api_key: str):
             top = filtered.iloc[0]
             history.append((top["track_name"], top["track_artist"]))
     else:
-        genre = preferences.get("genre", "rock")
-        tempo = preferences.get("tempo", "medium")
-        mood = preferences.get("mood", "calm")
-        energy = "energetic"
-        key = build_recommendation_key(genre, mood, energy, tempo)
-        fallback_list = recommendation_map.get(key, [])
-        non_repeats = [song for song in fallback_list if (song["track_name"], song["track_artist"]) not in history]
-        if non_repeats:
-            top = random.choice(non_repeats)
-            history.append((top["track_name"], top["track_artist"]))
-        elif fallback_list:
-            top = random.choice(fallback_list)
-            history.append((top["track_name"], top["track_artist"]))
+        # Fallback: recommend the most popular song globally (never fails)
+        if not df.empty:
+            fallback = df.sort_values(by="popularity" if "popularity" in df.columns else "track_popularity", ascending=False)
+            for _, row in fallback.iterrows():
+                if (row["track_name"], row["track_artist"]) not in history:
+                    top = row
+                    history.append((row["track_name"], row["track_artist"]))
+                    break
+            if top is None and not fallback.empty:
+                top = fallback.iloc[0]
+                history.append((top["track_name"], top["track_artist"]))
         else:
-            return None
+            return {
+                "song": "N/A",
+                "artist": "N/A",
+                "genre": "N/A",
+                "mood": preferences.get("mood", "Unknown"),
+                "tempo": "Unknown",
+                "spotify_url": None
+            }
 
     preferences["history"] = history
 
@@ -209,7 +213,7 @@ def recommend_engine(preferences: dict, api_key: str):
 
     if preferences.get("artist_or_song"):
         requested = preferences["artist_or_song"].lower()
-        if top.get("track_artist", "").lower() != requested:
+        if top.get("track_artist", "").lower() != requested and requested not in top.get("track_artist", "").lower():
             response["artist_not_found"] = True
             response["requested_artist"] = requested
 

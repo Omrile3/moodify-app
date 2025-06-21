@@ -2,8 +2,14 @@ import threading
 from collections import defaultdict
 
 class SessionMemory:
+    HISTORY_LIMIT = 100
+
     def __init__(self):
-        self.sessions = defaultdict(lambda: {
+        self.sessions = defaultdict(self._empty_session)
+        self.lock = threading.Lock()
+
+    def _empty_session(self):
+        return {
             "genre": None,
             "mood": None,
             "tempo": None,
@@ -17,12 +23,11 @@ class SessionMemory:
             "history": [],
             "last_song": None,
             "last_artist": None,
-        })
-        self.lock = threading.Lock()
+        }
 
     def get_session(self, session_id):
         with self.lock:
-            return self.sessions[session_id]
+            return dict(self.sessions[session_id])  # Return a copy for safety
 
     def update_session(self, session_id, key, value):
         with self.lock:
@@ -30,34 +35,25 @@ class SessionMemory:
 
     def reset_session(self, session_id):
         with self.lock:
-            self.sessions[session_id] = {
-                "genre": None,
-                "mood": None,
-                "tempo": None,
-                "artist_or_song": None,
-                "no_pref_genre": False,
-                "no_pref_mood": False,
-                "no_pref_tempo": False,
-                "no_pref_artist_or_song": False,
-                "awaiting_feedback": False,
-                "followup_count": 0,
-                "history": [],
-                "last_song": None,
-                "last_artist": None,
-            }
+            self.sessions[session_id] = self._empty_session()
 
     def update_last_song(self, session_id, song, artist):
         with self.lock:
-            self.sessions[session_id]["last_song"] = song
-            self.sessions[session_id]["last_artist"] = artist
+            s = self.sessions[session_id]
+            s["last_song"] = song
+            s["last_artist"] = artist
             # Always add to history (never repeat)
-            if (song, artist) not in self.sessions[session_id]["history"]:
-                self.sessions[session_id]["history"].append((song, artist))
-            # Deduplicate just in case
+            pair = (song, artist)
+            if pair not in s["history"]:
+                s["history"].append(pair)
+            # Deduplicate
             seen = set()
             unique = []
-            for pair in self.sessions[session_id]["history"]:
-                if pair not in seen:
-                    unique.append(pair)
-                    seen.add(pair)
-            self.sessions[session_id]["history"] = unique
+            for p in reversed(s["history"]):
+                if p not in seen:
+                    unique.append(p)
+                    seen.add(p)
+            s["history"] = list(reversed(unique))
+            # Limit history size
+            if len(s["history"]) > self.HISTORY_LIMIT:
+                s["history"] = s["history"][-self.HISTORY_LIMIT:]
