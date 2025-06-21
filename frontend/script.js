@@ -1,16 +1,20 @@
-const backendUrl = "https://moodify-app-mcic.onrender.com";
+const backendUrl = "https://moodify-app-mcic.onrender.com"; // Change if your backend URL differs!
+const chatEl = document.getElementById("chat");
 const inputForm = document.getElementById("inputForm");
 const userInput = document.getElementById("userInput");
 const sendBtn = document.getElementById("sendBtn");
-const chatEl = document.getElementById("chat");
+const resetBtn = document.getElementById("resetBtn");
+const loadingEl = document.getElementById("loading");
 
 function generateSessionId() {
-  return localStorage.getItem("moodify_session_id") ||
+  return (
+    localStorage.getItem("moodify_session_id") ||
     (() => {
       const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
       localStorage.setItem("moodify_session_id", id);
       return id;
-    })();
+    })()
+  );
 }
 const sessionId = generateSessionId();
 
@@ -26,6 +30,7 @@ function appendMsg(text, sender = "bot") {
 }
 
 function setLoading(isLoading) {
+  loadingEl.style.display = isLoading ? "block" : "none";
   sendBtn.disabled = isLoading;
   userInput.disabled = isLoading;
 }
@@ -51,7 +56,31 @@ inputForm.addEventListener("submit", async (e) => {
   setLoading(false);
 });
 
+resetBtn.addEventListener("click", async () => {
+  setLoading(true);
+  try {
+    const resp = await fetch(`${backendUrl}/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId })
+    });
+    const data = await resp.json();
+    appendMsg("<span style='color:#4f46e5;font-weight:bold;'>[Preferences reset]</span> " + data.response, "bot");
+  } catch (err) {
+    appendMsg("⚠️ Could not reset preferences.", "bot");
+  }
+  setLoading(false);
+});
+
+// Animated dots for "Thinking..."
+let dots = 0;
+setInterval(() => {
+  if (!loadingEl) return;
+  dots = (dots + 1) % 4;
+  loadingEl.querySelector(".dots").textContent = ".".repeat(dots);
+}, 500);
+
 // Initial bot message
 window.addEventListener("DOMContentLoaded", () => {
-  appendMsg("Hey there! 👋 I'm Moodify, your music assistant. Let's find the perfect song. What genre are you in the mood for?");
+  appendMsg("Hey there! 👋 I'm Moodify, your smart music assistant. Let's find your perfect song!<br>What genre are you in the mood for?");
 });
