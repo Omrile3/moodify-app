@@ -46,13 +46,15 @@ def is_english(s):
         return False
 
 def fuzzy_match(val, choices, threshold=75):
-    """Return best fuzzy match from choices, or None if below threshold."""
+    """Return best fuzzy match from choices (as strings, skipping nulls), or None if below threshold."""
     if not val:
         return None
-    matches = process.extract(val.lower(), [str(c).lower() for c in choices], scorer=fuzz.token_set_ratio, limit=1)
+    # Only use non-null, string-cast values for matching
+    choices_str = [str(c) for c in choices if pd.notnull(c)]
+    matches = process.extract(val.lower(), [c.lower() for c in choices_str], scorer=fuzz.token_set_ratio, limit=1)
     if matches and matches[0][1] >= threshold:
-        # Return the original case value from choices (not lower)
-        orig = [c for c in choices if c.lower() == matches[0][0]]
+        # Return the original case value from choices_str (not lower)
+        orig = [c for c in choices_str if c.lower() == matches[0][0]]
         return orig[0] if orig else None
     return None
 
