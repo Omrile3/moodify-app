@@ -2,5 +2,7 @@ fastapi
 uvicorn
 pandas
 openai
-python-multipart
-rapidfuzz
+python-dotenv
+scikit-learn
+pydantic
+requests

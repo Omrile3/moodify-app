@@ -1,128 +1,381 @@
+import difflib
+import requests
+import json
 import re
-from rapidfuzz import process, fuzz
 import pandas as pd
-from recommender_eng import recommend_engine
+import base64
+import os
 
-SONG_CSV_PATH = "songs.csv"
-df = pd.read_csv(SONG_CSV_PATH)
-df.columns = [c.strip() for c in df.columns]
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL = "gpt-4o"  
 
-GENRES = sorted(set(str(x).lower() for x in df["playlist_genre"].dropna().unique()))
-TEMPOS = sorted(set(str(x).lower() for x in df["tempo_category"].dropna().unique()))
+GENRES = {
+    "pop", "rock", "classical", "jazz", "metal", "electronic", "hip hop", "rap",
+    "r&b", "lofi", "latin", "folk", "reggae", "country", "blues", "indie"
+}
 
-# Collect all mood words from recommendation_key
-MOODS = set()
-for v in df["recommendation_key"].dropna():
-    for mood in str(v).split():
-        MOODS.add(mood.lower())
+MOODS = {
+    "happy", "sad", "energetic", "calm", "nostalgic", "romantic", "angry",
+    "hopeful", "mellow", "funky", "anxious", "relaxed", "bittersweet", "uplifting", "melancholy",
+    "dreamy", "groovy", "chilled", "moody", "dark", "powerful", "rebellious", "relaxing",
+    "intense", "soulful", "epic", "bright", "mysterious", "passionate", "sensual", "tropical",
+    "atmospheric", "playful", "fierce", "gritty", "peaceful", "chill", "smooth", "melancholic"
+}
 
-ARTISTS = set(str(x) for x in df["track_artist"].dropna().unique())
+NONE_LIKE = {
+    "no", "none", "nah", "not really", "nothing", "any", "anything", "whatever",
+    "doesn't matter", "does not matter", "no preference", "up to you",
+    "anything is fine", "i don't care", "i don't mind", "doesn't matter to me", "no specific preference", "no prefernce"
+}
 
-def fuzzy_match(val, choices, threshold=70):
-    if not val: return None
-    choices_str = [str(c) for c in choices if pd.notnull(c)]
-    matches = process.extract(val.lower(), [c.lower() for c in choices_str], scorer=fuzz.token_set_ratio, limit=1)
-    if matches and matches[0][1] >= threshold:
-        orig = [c for c in choices_str if c.lower() == matches[0][0]]
-        return orig[0] if orig else None
+VAGUE_TO_MOOD = {
+    "something good": "happy",
+    "good": "happy",
+    "positive": "happy",
+    "uplifting": "happy",
+    "something fun": "happy",
+    "something sad": "sad",
+    "more energy": "energetic",
+    "energy": "energetic",
+    "energetic": "energetic",
+    "calm": "calm",
+    "chill": "calm",
+}
+
+HARDCODED_MOOD_VECTORS = {
+    "happy":        [0.9, 0.8, 0.7, 0.2, 0.6],
+    "sad":          [0.2, 0.3, 0.2, 0.6, 0.4],
+    "energetic":    [0.7, 0.9, 0.8, 0.1, 0.8],
+    "calm":         [0.5, 0.4, 0.3, 0.7, 0.5],
+    "nostalgic":    [0.6, 0.4, 0.5, 0.5, 0.4],
+    "romantic":     [0.8, 0.5, 0.7, 0.6, 0.5],
+    "angry":        [0.3, 0.95, 0.5, 0.1, 0.9],
+    "hopeful":      [0.85, 0.6, 0.7, 0.4, 0.6],
+    "mellow":       [0.7, 0.3, 0.4, 0.8, 0.3],
+    "funky":        [0.8, 0.7, 0.95, 0.3, 0.7],
+    "anxious":      [0.3, 0.7, 0.5, 0.2, 0.8],
+    "relaxed":      [0.8, 0.4, 0.5, 0.8, 0.4],
+    "bittersweet":  [0.6, 0.5, 0.4, 0.6, 0.4],
+    "uplifting":    [0.85, 0.75, 0.6, 0.2, 0.7],
+    "melancholy":   [0.3, 0.4, 0.4, 0.6, 0.3],
+    "dreamy":       [0.7, 0.5, 0.6, 0.7, 0.4],
+    "groovy":       [0.8, 0.6, 0.95, 0.2, 0.6],
+    "chilled":      [0.6, 0.3, 0.4, 0.9, 0.3],
+    "moody":        [0.4, 0.5, 0.5, 0.7, 0.4],
+    "dark":         [0.2, 0.7, 0.3, 0.3, 0.7],
+    "powerful":     [0.7, 0.95, 0.7, 0.1, 0.8],
+    "rebellious":   [0.4, 0.9, 0.7, 0.1, 0.85],
+    "relaxing":     [0.8, 0.3, 0.5, 0.8, 0.3],
+    "intense":      [0.5, 0.97, 0.6, 0.05, 0.95],
+    "soulful":      [0.85, 0.6, 0.8, 0.5, 0.55],
+    "epic":         [0.7, 0.95, 0.5, 0.1, 0.95],
+    "bright":       [0.9, 0.7, 0.7, 0.3, 0.6],
+    "mysterious":   [0.3, 0.4, 0.3, 0.6, 0.4],
+    "passionate":   [0.8, 0.85, 0.7, 0.2, 0.7],
+    "sensual":      [0.7, 0.6, 0.7, 0.7, 0.5],
+    "tropical":     [0.8, 0.7, 0.95, 0.1, 0.7],
+    "atmospheric":  [0.5, 0.5, 0.5, 0.9, 0.4],
+    "playful":      [0.8, 0.7, 0.8, 0.3, 0.7],
+    "fierce":       [0.5, 1.0, 0.5, 0.1, 0.9],
+    "gritty":       [0.3, 0.8, 0.7, 0.2, 0.7],
+    "peaceful":     [0.9, 0.2, 0.4, 0.95, 0.3],
+    "chill":        [0.7, 0.3, 0.5, 0.9, 0.3],
+    "smooth":       [0.8, 0.4, 0.8, 0.85, 0.5],
+    "melancholic":  [0.4, 0.4, 0.3, 0.7, 0.3],
+}
+_MOOD_VECTOR_CACHE = {}
+
+def get_mood_vector(mood, api_key, fallback=HARDCODED_MOOD_VECTORS):
+    mood = mood.lower().strip()
+    if mood in _MOOD_VECTOR_CACHE:
+        return _MOOD_VECTOR_CACHE[mood]
+    if mood in fallback:
+        return fallback[mood]
+    prompt = (
+        f"The mood '{mood}' needs to be mapped to a 5-dimensional music feature vector: "
+        "valence (happiness), energy, danceability, acousticness, and tempo, each as a number between 0 and 1. "
+        "Respond ONLY with a Python list of 5 floats between 0 and 1, e.g. [0.8, 0.7, 0.9, 0.2, 0.6]."
+    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    body = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "system", "content": "You are an expert at mapping musical moods to audio feature vectors."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 64
+    }
+    try:
+        response = requests.post(OPENAI_API_URL, headers=headers, json=body, timeout=10)
+        response.raise_for_status()
+        text = response.json()["choices"][0]["message"]["content"].strip()
+        arr = None
+        match = re.search(r"\[([^\[\]]+)\]", text)
+        if match:
+            arr = match.group(0)
+            arr = [float(x.strip()) for x in arr.strip("[]").split(",")]
+        if arr and len(arr) == 5 and all(0 <= x <= 1 for x in arr):
+            _MOOD_VECTOR_CACHE[mood] = arr
+            return arr
+    except Exception as e:
+        print("GPT mood vector fetch failed, fallback to hardcoded:", e)
+    return fallback.get(mood, fallback["calm"])
+
+def convert_tempo_to_bpm(tempo_category: str) -> tuple:
+    return {
+        'slow': (0, 89),
+        'medium': (90, 120),
+        'fast': (121, 300)
+    }.get(tempo_category.lower(), (0, 300))
+
+def bpm_to_tempo_category(bpm: float) -> str:
+    if bpm < 90:
+        return "slow"
+    elif bpm <= 120:
+        return "medium"
+    else:
+        return "fast"
+
+def fuzzy_match_word(word, options, cutoff=0.75):
+    if not word:
+        return None
+    matches = difflib.get_close_matches(word.lower(), options, n=1, cutoff=cutoff)
+    if matches:
+        return matches[0]
     return None
 
-def extract_preferences_from_message(msg, session):
-    m = msg.lower()
-    # Extract genre, mood, artist, tempo using fuzzy
-    genre = fuzzy_match(m, GENRES)
-    mood = fuzzy_match(m, MOODS)
-    tempo = fuzzy_match(m, TEMPOS)
-    artist = None
-    for a in ARTISTS:
-        if fuzzy_match(m, [a], 85):  # Higher threshold for artist name
-            artist = a
-            break
-    # Update session
-    if genre and not session.get("genre"):
-        session["genre"] = genre
-    if mood and not session.get("mood"):
-        session["mood"] = mood
-    if artist and not session.get("artist"):
-        session["artist"] = artist
-    if tempo and not session.get("tempo"):
-        session["tempo"] = tempo
-    # Handle "no preference"
-    if "no preference" in m or "anything" in m or "doesn't matter" in m:
-        for field in ["genre", "mood", "artist", "tempo"]:
-            if not session.get(field):
-                session[field] = None
-                session["no_pref"].add(field)
-                break
+def fuzzy_match_artist_song(df, query: str):
+    if not isinstance(query, str):
+        print(f"Invalid query type: {type(query)}. Expected a string.")
+        return df.head(5)
+    query = query.lower()
+    print(f"Performing fuzzy match for query: {query}")
+    df['track_artist'] = df['track_artist'].fillna("").astype(str).str.lower()
+    df['track_name'] = df['track_name'].fillna("").astype(str).str.lower()
+    artist_matches = difflib.get_close_matches(query, df['track_artist'], n=5, cutoff=0.6)
+    song_matches = difflib.get_close_matches(query, df['track_name'].str.lower(), n=5, cutoff=0.6)
+    if artist_matches:
+        return df[df['track_artist'].str.lower().isin(artist_matches)]
+    elif song_matches:
+        return df[df['track_name'].str.lower().isin(song_matches)]
+    else:
+        return df.nlargest(5, 'popularity') if 'popularity' in df.columns else df.head(5)
 
-def next_ai_message(session, message):
-    # Update prefs from message
-    extract_preferences_from_message(message, session)
-    # Feedback phase
-    if session["awaiting_feedback"]:
-        m = message.lower()
-        if "yes" in m or "love" in m or "like" in m:
-            session["awaiting_feedback"] = False
-            return ("Great! If you want another, just ask.", None)
-        elif "another" in m:
-            session["history"].add(session["last_rec"])
-            rec = recommend_engine(session, session["history"])
-            if rec is not None:
-                session["last_rec"] = rec["track_id"]
-                return (
-                    f"Here's another: '{rec['track_name']}' by {rec['track_artist']}.", rec
-                )
-            else:
-                return ("Sorry, I couldn't find another with those preferences.", None)
-        elif "change" in m:
-            if "genre" in m:
-                session["genre"] = None
-                session["no_pref"].discard("genre")
-            elif "mood" in m:
-                session["mood"] = None
-                session["no_pref"].discard("mood")
-            elif "artist" in m:
-                session["artist"] = None
-                session["no_pref"].discard("artist")
-            elif "tempo" in m:
-                session["tempo"] = None
-                session["no_pref"].discard("tempo")
-            else:
-                return ("What would you like to change? (genre, mood, artist, tempo)", None)
-            session["awaiting_feedback"] = False
-            return (f"Sure! What {', '.join([k for k in ['genre','mood','artist','tempo'] if session[k] is None])} are you in the mood for?", None)
-        elif "reset" in m or "start over" in m:
-            for k in ["genre", "mood", "artist", "tempo"]:
-                session[k] = None
-            session["no_pref"] = set()
-            session["history"] = set()
-            session["awaiting_feedback"] = False
-            return ("All preferences reset. What genre are you in the mood for?", None)
-        else:
-            return ("Let me know if you'd like another recommendation or want to change something.", None)
-    # Gather all preferences
-    missing = [k for k in ["genre", "mood", "artist", "tempo"] if session.get(k) is None and k not in session["no_pref"]]
-    if missing:
-        field = missing[0]
-        prompts = {
-            "genre": "What genre are you in the mood for? (e.g., pop, rock, r&b...)",
-            "mood": "What mood are you feeling? (e.g., happy, sad, romantic, energetic...)",
-            "artist": "Any favorite artist? (or 'no preference')",
-            "tempo": "Do you prefer a slow, medium, or fast tempo? (or 'no preference')"
+def generate_chat_response(song_dict: dict, preferences: dict, api_key: str, custom_prompt: str = None) -> str:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    genre = preferences.get('genre') or "any"
+    mood = preferences.get('mood') or "any"
+    tempo = preferences.get('tempo') or "any"
+    song = song_dict.get('song', 'Unknown')
+    artist = song_dict.get('artist', 'Unknown')
+    song_genre = song_dict.get('genre', 'Unknown')
+    song_tempo = song_dict.get('tempo', 'Unknown')
+    spotify_url = song_dict.get('spotify_url')
+    prompt = custom_prompt or f"""
+You are Moodify, a friendly and concise music recommendation assistant.
+The user wants a song that matches these preferences:
+Genre: {genre}, Mood: {mood}, Tempo: {tempo}.
+Recommend only the selected song: "{song}" by {artist} ({song_genre}, {song_tempo} tempo).
+If there is a Spotify link available, include 'Listen on Spotify' as a hyperlink.
+Reply in a warm and friendly tone. Your response must be short and concise — no more than 1.5 sentences.
+Don't suggest alternatives or explain why. Mention only this one song.
+"""
+    body = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are a helpful music assistant. Respond in under 1.5 sentences."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.6,
+        "max_tokens": 200
+    }
+    try:
+        response = requests.post(OPENAI_API_URL, headers=headers, json=body)
+        response.raise_for_status()
+        message = response.json()["choices"][0]["message"]["content"].strip()
+        if spotify_url and isinstance(spotify_url, str) and "open.spotify.com/track/" in spotify_url and len(spotify_url) > 35:
+            message += f' 🎵 <a href="{spotify_url}" target="_blank">Listen on Spotify</a>'
+        return message
+    except Exception as e:
+        print("OpenAI Chat Error:", e)
+        fallback = f"🎵 Here’s a great track: '{song}' by {artist}."
+        if spotify_url and isinstance(spotify_url, str) and "open.spotify.com/track/" in spotify_url and len(spotify_url) > 35:
+            fallback += f' <a href="{spotify_url}" target="_blank">Listen</a>'
+        return fallback
+
+def extract_preferences_from_message(message: str, api_key: str) -> dict:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    msg = message.strip().lower()
+
+    # --- Step 1: Detect "no preference" for each field separately ---
+    def contains_none_like(val):
+        for none_str in NONE_LIKE:
+            if f" {none_str} " in f" {val} ":
+                return True
+        return False
+    none_fields = {field: contains_none_like(msg) for field in ["genre", "mood", "tempo", "artist_or_song"]}
+
+    # --- Step 2: Quick mapping for vague phrases ---
+    mapped = {}
+    for phrase, mapped_val in VAGUE_TO_MOOD.items():
+        if phrase in msg:
+            if mapped_val in MOODS:
+                mapped["mood"] = mapped_val
+            if mapped_val == "energetic":
+                mapped["tempo"] = "fast"
+            break
+
+    # --- Step 3: Call GPT-4o for extraction ---
+    extracted = {}
+    if not any(none_fields.values()):
+        mood_list_str = ", ".join(f'"{m}"' for m in sorted(MOODS))
+        system_prompt = (
+            f"You are an AI that extracts ONLY music preferences from user input in English.\n"
+            f"For the 'mood' field, only use one of these values (case-insensitive, single word): [{mood_list_str}].\n"
+            "If the user's input doesn't clearly match a mood in the list, set 'mood' to null.\n"
+            "If the message is not in English, reply ONLY with this: '__NOT_ENGLISH__'.\n"
+            "If the message is not about music, reply ONLY with this: '__NOT_MUSIC__'.\n"
+            "Respond only in valid JSON with exactly these 4 keys: genre, mood, tempo, artist_or_song. If a value is not clear, set to null.\n"
+            "Never infer or guess outside this set for moods."
+        )
+        user_prompt = f"""Extract the user's music preferences from the following message.
+If genre, mood, tempo, or artist/song is not mentioned or not clear, set to null.
+Reply only with the JSON object, nothing else.
+Input: "{message}".
+"""
+        body = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.2,
+            "max_tokens": 250
         }
-        return (prompts[field], None)
-    # All set: recommend!
-    rec = recommend_engine(session, session["history"])
-    if rec is None:
-        return ("Sorry, I couldn't find a match for those preferences. Try different options.", None)
-    session["awaiting_feedback"] = True
-    session["last_rec"] = rec["track_id"]
-    session["history"].add(rec["track_id"])
-    return (
-        f"How about '{rec['track_name']}' by {rec['track_artist']}'? Are you happy with this recommendation? (yes/no/another/change [field])",
-        rec
+        try:
+            response = requests.post(OPENAI_API_URL, headers=headers, json=body)
+            response.raise_for_status()
+            text = response.json()["choices"][0]["message"]["content"].strip()
+            if text == "__NOT_ENGLISH__":
+                extracted = {"genre": None, "mood": None, "tempo": None, "artist_or_song": None, "_not_english": True}
+                return extracted
+            elif text == "__NOT_MUSIC__":
+                extracted = {"genre": None, "mood": None, "tempo": None, "artist_or_song": None, "_not_music": True}
+                return extracted
+            if text.startswith("```"):
+                text = text.lstrip("`")
+                text = text[text.find("{"):]
+            match = re.search(r"\{[\s\S]*\}", text)
+            if match:
+                json_text = match.group(0)
+                try:
+                    extracted = json.loads(json_text)
+                except Exception as e:
+                    print("OpenAI Extraction Error (inner):", e, "| Offending text:", repr(json_text))
+                    extracted = {"genre": None, "mood": None, "tempo": None, "artist_or_song": None}
+            else:
+                print("OpenAI Extraction Error: Could not find JSON object in:", repr(text))
+                extracted = {"genre": None, "mood": None, "tempo": None, "artist_or_song": None}
+        except Exception as e:
+            print("OpenAI Extraction Error:", e)
+            extracted = {"genre": None, "mood": None, "tempo": None, "artist_or_song": None}
+    else:
+        extracted = {"genre": None, "mood": None, "tempo": None, "artist_or_song": None}
+
+    # --- Step 4: Post-processing: enforce allowed moods/genres ---
+    for key in ["genre", "mood", "tempo", "artist_or_song"]:
+        if none_fields.get(key):
+            extracted[key] = None
+        if key in mapped and mapped[key]:
+            extracted[key] = mapped[key]
+        if extracted.get(key) and isinstance(extracted[key], str):
+            val = extracted[key].strip().lower()
+            if val in NONE_LIKE:
+                extracted[key] = None
+            if key == "mood":
+                corrected = fuzzy_match_word(val, MOODS)
+                extracted[key] = corrected if corrected in MOODS else None
+            if key == "genre":
+                corrected = fuzzy_match_word(val, GENRES)
+                extracted[key] = corrected if corrected in GENRES else None
+    return {k: extracted.get(k, None) for k in ["genre", "mood", "tempo", "artist_or_song"]} | {k: v for k, v in extracted.items() if k.startswith("_")}
+
+
+def split_mode_category(mode_category: str) -> tuple:
+    if isinstance(mode_category, str):
+        parts = re.split(r'[\s_]+', mode_category.strip())
+        return (parts[0].lower(), parts[1].lower()) if len(parts) >= 2 else (parts[0].lower(), None)
+    return (None, None)
+
+def build_recommendation_key(genre: str, mood: str, energy: str, tempo: str) -> str:
+    return f"{genre}_{mood.capitalize()} {energy.capitalize()}_{tempo.capitalize()}"
+
+def precompute_recommendation_map(df: pd.DataFrame) -> dict:
+    index_map = {}
+    for _, row in df.iterrows():
+        genre = row.get("playlist_genre", "unknown")
+        tempo = row.get("tempo_category", "medium")
+        mood, energy = split_mode_category(row.get("mode_category", "calm calm"))
+        key = build_recommendation_key(genre, mood, energy, tempo)
+        if key not in index_map:
+            index_map[key] = []
+        index_map[key].append(row)
+    return index_map
+
+def next_ai_message(session: dict, last_user_message: str, api_key: str) -> str:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    all_keys = ["genre", "mood", "tempo", "artist_or_song"]
+    known_prefs = {k: session.get(k) for k in all_keys if session.get(k) is not None}
+    missing = [k for k in all_keys if not (session.get(k) is not None or session.get(f"no_pref_{k}", False))]
+    no_prefs = [k for k in all_keys if session.get(f"no_pref_{k}", False)]
+
+    system_prompt = (
+        "You are Moodify, a friendly, conversational AI music assistant. "
+        "Your job is to collect music preferences from the user (genre, mood, tempo, artist or song). "
+        "For each, you need a value or a clear 'no preference' message from the user - if they have no preference do not update the field. "
+        "Do NOT recommend any song until you have ALL FOUR: genre, mood, tempo, artist_or_song (or 'no preference' for each). "
+        "Ask for missing info naturally, but ONLY ask about ONE missing element at a time. Never repeat the same question if the user already said 'no preference' or similar for that element. "
+        "Once all are provided, you may recommend. After recommendation, always ask for feedback."
+        "If the user's message is off-topic or not in English, gently redirect them to music preferences, and ask in English."
     )
 
-def get_spotify_embed(rec):
-    track_id = rec["track_id"]
-    return f'<div style="margin:14px 0;"><iframe src="https://open.spotify.com/embed/track/{track_id}" width="100%" height="80" frameborder="0" allowtransparency="true" allow="encrypted-media"></iframe></div>'
+    user_prompt = (
+        f"Conversation state:\n"
+        f"Known preferences: {known_prefs}\n"
+        f"No preference for: {no_prefs}\n"
+        f"Still missing: {missing}\n"
+        f"User said: \"{last_user_message}\"\n\n"
+        "Continue the conversation to collect missing information, in a friendly way. "
+        "Only ask about ONE element that is still missing (not 'no preference'). "
+        "Do not give a recommendation until everything is filled."
+    )
+
+    body = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 200
+    }
+    try:
+        response = requests.post(OPENAI_API_URL, headers=headers, json=body)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print("OpenAI next_ai_message error:", e)
+        return "What kind of music do you feel like today?"

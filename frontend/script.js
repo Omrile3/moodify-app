@@ -1,4 +1,4 @@
-const backendUrl = "https://moodify-app-mcic.onrender.com";
+const backendUrl = "https://moodify-backend-uj8d.onrender.com";
 const sessionId = generateSessionId();
 
 window.handleBotReply = function (msg) {
