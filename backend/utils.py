@@ -1,6 +1,7 @@
 import re
 from rapidfuzz import process, fuzz
 import pandas as pd
+from recommender_eng import recommend_engine
 
 SONG_CSV_PATH = "songs.csv"
 df = pd.read_csv(SONG_CSV_PATH)
