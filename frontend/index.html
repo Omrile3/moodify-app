@@ -2,22 +2,45 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Moodify – Smart Song Recommender</title>
-  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Moodify 🎧</title>
+  <link rel="stylesheet" href="styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap" rel="stylesheet">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>Moodify <span>🎵</span></h1>
-      <button id="resetBtn" title="Reset all preferences">🔄 Reset</button>
-    </header>
-    <main id="chat"></main>
-    <form id="inputForm" autocomplete="off">
-      <input id="userInput" type="text" placeholder="Type your message..." autocomplete="off" />
-      <button id="sendBtn" type="submit">Send</button>
-    </form>
-    <div id="loading" style="display:none;">Thinking<span class="dots"></span></div>
+  <div class="main-layout">
+
+    <!-- CENTERED preferences panel! -->
+    <div class="preferences-outer">
+      <div id="preferences-panel" class="preferences-panel">
+        <h3>Your Preferences</h3>
+        <!-- Progress Bar Block: fits the sidebar perfectly -->
+        <div id="progress-container" style="margin-bottom:12px;">
+          <div id="progress-bar-bg" style="background:#162222;width:100%;height:16px;border-radius:8px;overflow:hidden;border:1.5px solid #00ffcc60;">
+            <div id="progress-bar-fill" style="background:linear-gradient(90deg,#00ffcc,#14d9b5 70%);width:0;height:100%;transition:width 0.4s;"></div>
+          </div>
+          <div id="progress-label" style="text-align:center;font-size:13px;margin-top:3px;color:#7fe2d8bb;letter-spacing:0.04em;">Preferences: 0/4 filled</div>
+        </div>
+        <ul>
+          <li><strong>Genre:</strong> <span id="pref-genre">—</span></li>
+          <li><strong>Mood:</strong> <span id="pref-mood">—</span></li>
+          <li><strong>Tempo:</strong> <span id="pref-tempo">—</span></li>
+          <li><strong>Artist/Song:</strong> <span id="pref-artist">—</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Main Chat Container -->
+    <div class="chat-container">
+      <h1>Moodify 🎶</h1>
+      <div id="chat-box" class="chat-box"></div>
+      <div class="input-container">
+        <input type="text" id="user-input" placeholder="Type your preferences or commands..." />
+        <button onclick="sendMessage()">Send</button>
+        <button onclick="resetSession()" class="reset-btn">🔄 Reset</button>
+      </div>
+      <div id="quick-options" class="options"></div>
+    </div>
   </div>
   <script src="script.js"></script>
 </body>
