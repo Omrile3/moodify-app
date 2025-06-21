@@ -32,7 +32,7 @@ memory = SessionMemory()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://moodify-frontend-j7oz.onrender.com"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
