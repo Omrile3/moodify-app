@@ -2,6 +2,7 @@ const backendUrl = "https://moodify-app-mcic.onrender.com";
 const inputForm = document.getElementById("inputForm");
 const userInput = document.getElementById("userInput");
 const sendBtn = document.getElementById("sendBtn");
+const chatEl = document.getElementById("chat");
 
 function generateSessionId() {
   return localStorage.getItem("moodify_session_id") ||
